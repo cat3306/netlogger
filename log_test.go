@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 )
+
 var logtText = `asdadasd`
 
 func Test1(t *testing.T) {
@@ -14,8 +15,8 @@ func Test1(t *testing.T) {
 		agent := ZapLoggerAgent{}
 		logger := agent.Init(&LogAgentConf{
 			ServerName: fmt.Sprintf("server%d", i),
-			AgentAddr:  "logagent:8899",
-		}).Conn().Demons().Logger()
+			AgentAddr:  "127.0.0.1:8899",
+		}).Conn().Daemon().Logger()
 		go func(l *zap.Logger) {
 			for {
 				l.Sugar().Debug(logtText)
@@ -23,7 +24,7 @@ func Test1(t *testing.T) {
 				l.Sugar().Info(logtText)
 				l.Sugar().Warn(logtText)
 				//logger.Sugar().Panic(logtText)
-				time.Sleep(time.Millisecond * 1000)
+				time.Sleep(time.Millisecond * 10)
 			}
 		}(logger)
 	}

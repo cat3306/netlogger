@@ -7,6 +7,8 @@ import (
 	"go.uber.org/zap/zapcore"
 	"net"
 	"strings"
+	"sync/atomic"
+	"time"
 )
 
 //copy go.uber.org/zap/internal/color
@@ -49,16 +51,18 @@ type LogAgentConf struct {
 	EncoderConf *zapcore.EncoderConfig
 }
 type ZapLoggerAgent struct {
-	conf        *LogAgentConf
-	color       map[string]zapcore.Level
-	logger      *zap.Logger
-	bufferChan  chan []byte
-	c           net.Conn
-	encoderConf *zapcore.EncoderConfig
-	offlineMode bool
+	conf           *LogAgentConf
+	color          map[string]zapcore.Level
+	logger         *zap.Logger
+	bufferChan     chan []byte
+	c              net.Conn
+	encoderConf    *zapcore.EncoderConfig
+	connAtomic     uint32 //1 connect 0:not connect
+	tryConnRunning uint32 //1 running 0:not running
 }
 
-func (l *ZapLoggerAgent) Demons() *ZapLoggerAgent {
+func (l *ZapLoggerAgent) Daemon() *ZapLoggerAgent {
+
 	go func() {
 		for b := range l.bufferChan {
 			_, err := l.c.Write(b)
@@ -74,11 +78,30 @@ func (l *ZapLoggerAgent) Conn() *ZapLoggerAgent {
 	c, err := net.Dial("udp", l.conf.AgentAddr)
 	if err != nil {
 		fmt.Println(err)
-		l.offlineMode = true
+		atomic.CompareAndSwapUint32(&l.connAtomic, 1, 0)
+
+		l.tryConn()
 		return l
 	}
+	atomic.CompareAndSwapUint32(&l.connAtomic, 0, 1)
 	l.c = c
 	return l
+}
+func (l *ZapLoggerAgent) tryConn() {
+	if atomic.LoadUint32(&l.tryConnRunning) == 1 {
+		return
+	}
+	go func() {
+		for {
+			if atomic.LoadUint32(&l.connAtomic) == 1 {
+				atomic.CompareAndSwapUint32(&l.tryConnRunning, 1, 0)
+				return
+			}
+			atomic.CompareAndSwapUint32(&l.tryConnRunning, 0, 1)
+			l.Conn()
+			time.Sleep(time.Second * 5)
+		}
+	}()
 }
 func (l *ZapLoggerAgent) initLogger() *ZapLoggerAgent {
 	if l.conf.EncoderConf == nil {
@@ -137,7 +160,7 @@ func (l *ZapLoggerAgent) Init(config *LogAgentConf) *ZapLoggerAgent {
 	return l
 }
 func (l *ZapLoggerAgent) Write(p []byte) (n int, err error) {
-	if l.offlineMode {
+	if atomic.LoadUint32(&l.connAtomic) == 0 {
 		fmt.Printf(string(p))
 		return len(p), nil
 	}
