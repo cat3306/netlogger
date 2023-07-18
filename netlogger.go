@@ -113,6 +113,7 @@ func (l *ZapLoggerAgent) initLogger() *ZapLoggerAgent {
 			EncodeTime:       zapcore.TimeEncoderOfLayout(Timeformat),
 			EncodeCaller:     zapcore.ShortCallerEncoder,
 			ConsoleSeparator: " ",
+			CallerKey:        "f",
 		}
 	}
 
