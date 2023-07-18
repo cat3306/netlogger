@@ -106,17 +106,13 @@ func (l *ZapLoggerAgent) tryConn() {
 func (l *ZapLoggerAgent) initLogger() *ZapLoggerAgent {
 	if l.conf.EncoderConf == nil {
 		l.conf.EncoderConf = &zapcore.EncoderConfig{
-			MessageKey:  "message",
-			LevelKey:    "level",
-			EncodeLevel: zapcore.CapitalColorLevelEncoder, // INFO
-
-			TimeKey:    "time",
-			EncodeTime: zapcore.TimeEncoderOfLayout(Timeformat),
-
-			CallerKey:        "caller",
+			MessageKey:       "message",
+			LevelKey:         "level",
+			EncodeLevel:      zapcore.CapitalColorLevelEncoder, // INFO
+			TimeKey:          "time",
+			EncodeTime:       zapcore.TimeEncoderOfLayout(Timeformat),
 			EncodeCaller:     zapcore.ShortCallerEncoder,
 			ConsoleSeparator: " ",
-			FunctionKey:      "func",
 		}
 	}
 
