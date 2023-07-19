@@ -35,10 +35,14 @@ type LogAgentConf struct {
 	EncoderConf *zapcore.EncoderConfig
 	EncoderType EncoderType
 }
+type pkg struct {
+	buff  []byte
+	total uint32
+}
 type ZapLoggerAgent struct {
 	conf           *LogAgentConf
 	logger         *zap.Logger
-	bufferChan     chan []byte
+	bufferChan     chan *pkg
 	c              net.Conn
 	connAtomic     uint32 //1 connect 0:not connect
 	tryConnRunning uint32 //1 running 0:not running
@@ -47,12 +51,12 @@ type ZapLoggerAgent struct {
 func (l *ZapLoggerAgent) Daemon() *ZapLoggerAgent {
 
 	go func() {
-		for b := range l.bufferChan {
-			_, err := l.c.Write(b)
+		for pg := range l.bufferChan {
+			_, err := l.c.Write(pg.buff[:pg.total])
 			if err != nil {
-				fmt.Printf(BytesToString(b))
+				fmt.Printf(BytesToString(pg.buff[:pg.total]))
 			}
-			//BUFFERPOOL.Put(b)
+			BUFFERPOOL.Put(pg.buff)
 		}
 	}()
 	return l
@@ -126,7 +130,7 @@ func (l *ZapLoggerAgent) Init(config *LogAgentConf) *ZapLoggerAgent {
 	if l.conf.ChanBuffer == 0 {
 		l.conf.ChanBuffer = 1024
 	}
-	l.bufferChan = make(chan []byte, l.conf.ChanBuffer)
+	l.bufferChan = make(chan *pkg, l.conf.ChanBuffer)
 	l.initLogger()
 	return l
 }
@@ -135,17 +139,21 @@ func (l *ZapLoggerAgent) Write(p []byte) (n int, err error) {
 		fmt.Printf(BytesToString(p))
 		return len(p), nil
 	}
-	pkg := l.EnCode(p)
+	buff, total := l.EnCode(p)
+	pg := &pkg{
+		buff:  buff,
+		total: total,
+	}
 	select {
 
-	case l.bufferChan <- pkg:
+	case l.bufferChan <- pg:
 	default:
 		fmt.Printf(BytesToString(p))
 	}
 	return len(p), nil
 }
 
-func (l *ZapLoggerAgent) EnCode(payload []byte) []byte {
+func (l *ZapLoggerAgent) EnCode(payload []byte) ([]byte, uint32) {
 	if l.conf.ServerName == "" {
 		panic("ServerName invalid")
 	}
@@ -159,7 +167,7 @@ func (l *ZapLoggerAgent) EnCode(payload []byte) []byte {
 	binary.LittleEndian.PutUint16(buf[headerLen:], l.logLevelStrToUint(payload))
 	copy(buf[headerLen+logLevelLen:], l.conf.ServerName)
 	copy(buf[headerLen+hl:], payload)
-	return buf[:total]
+	return buf, total
 }
 func (l *ZapLoggerAgent) logLevelStrToUint(text []byte) uint16 {
 	if l.conf.EncoderConf.LevelKey == "" {
