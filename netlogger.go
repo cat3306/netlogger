@@ -52,9 +52,7 @@ func (l *ZapLoggerAgent) Daemon() *ZapLoggerAgent {
 			if err != nil {
 				fmt.Printf(BytesToString(b))
 			}
-			start := uint32(len(l.conf.ServerName)) + logLevelLen + headerLen
-			fmt.Printf(BytesToString(b[start:]))
-			BUFFERPOOL.Put(b)
+			//BUFFERPOOL.Put(b)
 		}
 	}()
 	return l
