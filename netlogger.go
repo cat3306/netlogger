@@ -132,10 +132,11 @@ func (l *ZapLoggerAgent) Init(config *LogAgentConf) *ZapLoggerAgent {
 }
 func (l *ZapLoggerAgent) Write(p []byte) (n int, err error) {
 	if atomic.LoadUint32(&l.connAtomic) == 0 {
-		fmt.Printf(string(p))
+		fmt.Printf(BytesToString(p))
 		return len(p), nil
 	}
 	pkg := l.EnCode(p)
+	fmt.Printf(BytesToString(p))
 	select {
 
 	case l.bufferChan <- pkg:
