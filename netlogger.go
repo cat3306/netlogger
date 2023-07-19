@@ -1,6 +1,7 @@
 package netlogger
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"go.uber.org/zap"
@@ -9,34 +10,17 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
-//copy go.uber.org/zap/internal/color
-// Foreground colors.
+type EncoderType int
+
 const (
-	Black Color = iota + 30
-	Red
-	Green
-	Yellow
-	Blue
-	Magenta
-	Cyan
-	White
-)
-
-// Color represents a text color.
-type Color uint8
-
-// Add adds the coloring to the given string.
-func (c Color) Add(s string) string {
-	return fmt.Sprintf("\x1b[%dm%s\x1b[0m", uint8(c), s)
-}
-
-//copy go.uber.org/zap/internal/color
-const (
-	headerLen   = uint32(4)
-	logLevelLen = uint32(2)
-	Timeformat  = "2006-01-02 15:04:05.000"
+	headerLen      = uint32(4)
+	logLevelLen    = uint32(2)
+	Timeformat     = "2006-01-02 15:04:05.000"
+	ConsoleEncoder = EncoderType(0)
+	JsonEncoder    = EncoderType(1)
 )
 
 type LogAgent interface {
@@ -49,14 +33,13 @@ type LogAgentConf struct {
 	AgentAddr   string
 	ChanBuffer  int
 	EncoderConf *zapcore.EncoderConfig
+	EncoderType EncoderType
 }
 type ZapLoggerAgent struct {
 	conf           *LogAgentConf
-	color          map[string]zapcore.Level
 	logger         *zap.Logger
 	bufferChan     chan []byte
 	c              net.Conn
-	encoderConf    *zapcore.EncoderConfig
 	connAtomic     uint32 //1 connect 0:not connect
 	tryConnRunning uint32 //1 running 0:not running
 }
@@ -68,8 +51,8 @@ func (l *ZapLoggerAgent) Daemon() *ZapLoggerAgent {
 			_, err := l.c.Write(b)
 			if err != nil {
 				fmt.Printf(string(b))
-				continue
 			}
+			BUFFERPOOL.Put(b)
 		}
 	}()
 	return l
@@ -108,7 +91,7 @@ func (l *ZapLoggerAgent) initLogger() *ZapLoggerAgent {
 		l.conf.EncoderConf = &zapcore.EncoderConfig{
 			MessageKey:       "message",
 			LevelKey:         "level",
-			EncodeLevel:      zapcore.CapitalColorLevelEncoder, // INFO
+			EncodeLevel:      zapcore.CapitalLevelEncoder, // INFO
 			TimeKey:          "time",
 			EncodeTime:       zapcore.TimeEncoderOfLayout(Timeformat),
 			EncodeCaller:     zapcore.ShortCallerEncoder,
@@ -116,10 +99,13 @@ func (l *ZapLoggerAgent) initLogger() *ZapLoggerAgent {
 			CallerKey:        "f",
 		}
 	}
-
-	consoleEncode := zapcore.NewConsoleEncoder(*l.conf.EncoderConf)
+	encoder := zapcore.NewConsoleEncoder(*l.conf.EncoderConf)
+	l.conf.EncoderConf.EncodeLevel = zapcore.CapitalLevelEncoder
+	if l.conf.EncoderType == JsonEncoder {
+		encoder = zapcore.NewJSONEncoder(*l.conf.EncoderConf)
+	}
 	w := zapcore.AddSync(l)
-	core := zapcore.NewCore(consoleEncode, w, zapcore.DebugLevel)
+	core := zapcore.NewCore(encoder, w, zapcore.DebugLevel)
 	l.logger = zap.New(core, zap.AddCaller())
 	return l
 }
@@ -133,27 +119,15 @@ func (l *ZapLoggerAgent) Init(config *LogAgentConf) *ZapLoggerAgent {
 	if config.AgentAddr == "" {
 		panic("AgentAddr invalid")
 	}
+	if config.EncoderType < ConsoleEncoder || config.EncoderType > JsonEncoder {
+		panic("invalid EncoderType")
+	}
 	l.conf = config
-	l.color = map[string]zapcore.Level{}
-	debug := zapcore.DebugLevel.CapitalString()
-	info := zapcore.InfoLevel.CapitalString()
-	warn := zapcore.WarnLevel.CapitalString()
-	er := zapcore.ErrorLevel.CapitalString()
-	dPanic := zapcore.DPanicLevel.CapitalString()
-	pan := zapcore.PanicLevel.CapitalString()
-	fatal := zapcore.FatalLevel.CapitalString()
-	l.color[Magenta.Add(debug)] = zapcore.DebugLevel
-	l.color[Blue.Add(info)] = zapcore.InfoLevel
-	l.color[Yellow.Add(warn)] = zapcore.WarnLevel
-	l.color[Red.Add(er)] = zapcore.ErrorLevel
-	l.color[Red.Add(dPanic)] = zapcore.DPanicLevel
-	l.color[Red.Add(pan)] = zapcore.PanicLevel
-	l.color[Red.Add(fatal)] = zapcore.FatalLevel
-	l.initLogger()
 	if l.conf.ChanBuffer == 0 {
 		l.conf.ChanBuffer = 1024
 	}
 	l.bufferChan = make(chan []byte, l.conf.ChanBuffer)
+	l.initLogger()
 	return l
 }
 func (l *ZapLoggerAgent) Write(p []byte) (n int, err error) {
@@ -166,7 +140,7 @@ func (l *ZapLoggerAgent) Write(p []byte) (n int, err error) {
 
 	case l.bufferChan <- pkg:
 	default:
-		fmt.Printf(string(p))
+		fmt.Printf(BytesToString(p))
 	}
 	return len(p), nil
 }
@@ -177,29 +151,68 @@ func (l *ZapLoggerAgent) EnCode(payload []byte) []byte {
 	}
 
 	hl := uint32(len(l.conf.ServerName)) + logLevelLen
-	buf := make([]byte, uint32(len(payload))+hl+headerLen)
+	total := uint32(len(payload)) + hl + headerLen
+	ptr := BUFFERPOOL.Get(total)
+	buf := *ptr
+	//buf := make([]byte, uint32(len(payload))+hl+headerLen)
 	binary.LittleEndian.PutUint32(buf, hl)
 	binary.LittleEndian.PutUint16(buf[headerLen:], l.logLevelStrToUint(payload))
 	copy(buf[headerLen+logLevelLen:], l.conf.ServerName)
 	copy(buf[headerLen+hl:], payload)
-
-	return buf
+	return buf[:total]
 }
 func (l *ZapLoggerAgent) logLevelStrToUint(text []byte) uint16 {
-	timeLen := len(Timeformat)
-	s := strings.Builder{}
-	//timeLen+16 防止遍历整个text
-	for i := timeLen + 1; i < timeLen+16; i++ {
-		if text[i] == ' ' {
-			break
-		}
-		s.WriteByte(text[i])
+	if l.conf.EncoderConf.LevelKey == "" {
+		return 0 //
 	}
-	le := l.color[s.String()]
-	le++ //zapcore.DebugLevel value -1 but to convert uint16,so +1
-	return uint16(le)
+	if l.conf.EncoderConf.EncodeLevel == nil {
+		return 0
+	}
+
+	var lvl zapcore.Level
+	if l.conf.EncoderType == JsonEncoder {
+		str := BytesToString(text)
+		start := strings.Index(str, ":") + 2
+		end := start
+		for i := start; i < start+16; i++ {
+			if str[i] == '"' {
+				end = i
+				break
+			}
+		}
+
+		_ = lvl.UnmarshalText(text[start:end])
+		return uint16(lvl) + 1
+	}
+	separator := StringToBytes(l.conf.EncoderConf.ConsoleSeparator)
+	if l.conf.EncoderConf.TimeKey != "" {
+		idx := bytes.Index(text, separator)
+		idx++
+		start := bytes.Index(text[idx:], separator)
+		start++
+		end := bytes.Index(text[start+idx:], separator)
+		_ = lvl.UnmarshalText(text[start+idx : start+idx+end])
+	} else {
+		idx := bytes.Index(text, separator)
+		_ = lvl.UnmarshalText(text[:idx])
+	}
+	//fmt.Println(lvl)
+	return uint16(lvl) + 1
 }
 
 func (l *ZapLoggerAgent) Logger() *zap.Logger {
 	return l.logger
+}
+
+func StringToBytes(s string) []byte {
+	return *(*[]byte)(unsafe.Pointer(
+		&struct {
+			string
+			Cap int
+		}{s, len(s)},
+	))
+}
+
+func BytesToString(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
 }

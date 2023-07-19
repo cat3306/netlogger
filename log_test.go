@@ -23,9 +23,11 @@ func Test1(t *testing.T) {
 	for i := 0; i < 1; i++ {
 		agent := ZapLoggerAgent{}
 		logger := agent.Init(&LogAgentConf{
-			ServerName: fmt.Sprintf("server%d", i),
-			AgentAddr:  "127.0.0.1:8899",
+			ServerName:  fmt.Sprintf("server%d", i),
+			AgentAddr:   "127.0.0.1:8899",
+			EncoderType: ConsoleEncoder,
 		}).Conn().Daemon().Logger()
+
 		go func(l *zap.Logger) {
 			for {
 				l.Sugar().Debug(logtText)
