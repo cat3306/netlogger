@@ -50,8 +50,10 @@ func (l *ZapLoggerAgent) Daemon() *ZapLoggerAgent {
 		for b := range l.bufferChan {
 			_, err := l.c.Write(b)
 			if err != nil {
-				fmt.Printf(string(b))
+				fmt.Printf(BytesToString(b))
 			}
+			start := uint32(len(l.conf.ServerName)) + logLevelLen + headerLen
+			fmt.Printf(BytesToString(b[start:]))
 			BUFFERPOOL.Put(b)
 		}
 	}()
@@ -136,7 +138,6 @@ func (l *ZapLoggerAgent) Write(p []byte) (n int, err error) {
 		return len(p), nil
 	}
 	pkg := l.EnCode(p)
-	fmt.Printf(BytesToString(p))
 	select {
 
 	case l.bufferChan <- pkg:
