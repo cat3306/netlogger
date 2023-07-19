@@ -21,7 +21,7 @@ type ADVideoAwardCallBackReq struct {
 
 func Test1(t *testing.T) {
 
-	for i := 0; i < 1; i++ {
+	for i := 0; i < 100; i++ {
 		agent := ZapLoggerAgent{}
 		logger := agent.Init(&LogAgentConf{
 			ServerName:  fmt.Sprintf("server%d", i),
